@@ -1,10 +1,13 @@
-
-
-
 # Take parsed R code (anything returnable by base::str2lang()) and returns
 # a Fortran object, which is a string of Fortran code and some attributes
 # describing the value.
-lang2fortran <- r2f <- function(e, scope = NULL, ..., calls = character(), hoist = NULL) {
+lang2fortran <- r2f <- function(
+  e,
+  scope = NULL,
+  ...,
+  calls = character(),
+  hoist = NULL
+) {
   ## 'hoist()' is a function that individual handlers can call to pre-emit some
   ## Fortran code. E.g., to setup a temporary variable if the generated Fortran
   ## code doesn't neatly translate into a single expression.
@@ -12,122 +15,132 @@ lang2fortran <- r2f <- function(e, scope = NULL, ..., calls = character(), hoist
   if (is.null(hoist)) {
     delayedAssign("hoist_connection", textConnection("hoisted", "w", TRUE))
     hoist <- function(...) {
-      writeLines(as.character(unlist(c(character(), ...))),
-                 hoist_connection)
+      writeLines(as.character(unlist(c(character(), ...))), hoist_connection)
     }
-  # if performance with textConnection() becomes an issue, maybe switch to an
-  # anonymous file(), though, each hoisting context is typically shortlived and
-  # usually 0 lines are hoisted per context, and if they are hoisted, a small number.
+    # if performance with textConnection() becomes an issue, maybe switch to an
+    # anonymous file(), though, each hoisting context is typically shortlived and
+    # usually 0 lines are hoisted per context, and if they are hoisted, a small number.
   }
 
-  fortran <- switch(typeof(e),
-      language = {
-        # a call
-        handler <- get_r2f_handler(callable <- e[[1L]])
+  fortran <- switch(
+    typeof(e),
+    language = {
+      # a call
+      handler <- get_r2f_handler(callable <- e[[1L]])
 
-        match.fun <- attr(handler, "match.fun", TRUE)
-        if (is.null(match.fun)) {
-          match.fun <- get0(callable, parent.env(globalenv()),
-                            mode = "function")
-          # this is a best effort to, eg. resolve `seq.default` from `seq`.
-          # This should likely be moved into attaching the `match.fun` attr
-          # to handlers, for more involved resolution (e.g., with getS3Method())
-          if ("UseMethod" %in% all.names(body(match.fun)))
-            match.fun <- get0(paste0(callable, ".default"),
-                              parent.env(globalenv()),
-                              mode = "function",
-                              ifnotfound = match.fun)
+      match.fun <- attr(handler, "match.fun", TRUE)
+      if (is.null(match.fun)) {
+        match.fun <- get0(callable, parent.env(globalenv()), mode = "function")
+        # this is a best effort to, eg. resolve `seq.default` from `seq`.
+        # This should likely be moved into attaching the `match.fun` attr
+        # to handlers, for more involved resolution (e.g., with getS3Method())
+        if ("UseMethod" %in% all.names(body(match.fun))) {
+          match.fun <- get0(
+            paste0(callable, ".default"),
+            parent.env(globalenv()),
+            mode = "function",
+            ifnotfound = match.fun
+          )
         }
-        if (typeof(match.fun) == "closure") {
-          e <- match.call(match.fun, e)
+      }
+      if (typeof(match.fun) == "closure") {
+        e <- match.call(match.fun, e)
+      }
+
+      if (isTRUE(getOption("quickr.r2f.debug"))) {
+        try(handler(
+          as.list(e)[-1L],
+          scope,
+          ...,
+          calls = c(calls, as.character(callable)),
+          hoist = hoist
+        )) -> res
+        if (inherits(res, "try-error")) {
+          debugonce(handler)
+          handler(
+            as.list(e)[-1L],
+            scope,
+            ...,
+            calls = c(calls, as.character(callable)),
+            hoist = hoist
+          )
         }
 
-        if (isTRUE(getOption("quickr.r2f.debug"))) {
+        res
+      } else {
+        handler(
+          as.list(e)[-1L],
+          scope,
+          ...,
+          calls = c(calls, as.character(callable)),
+          hoist = hoist
+        )
+      }
+    },
 
-          try(handler(as.list(e)[-1L], scope, ...,
-                      calls = c(calls, as.character(callable)),
-                      hoist = hoist)) -> res
-          if (inherits(res, "try-error")) {
-            debugonce(handler)
-            handler(as.list(e)[-1L], scope, ...,
-                    calls = c(calls, as.character(callable)),
-                    hoist = hoist)
-          }
+    integer = ,
+    double = ,
+    complex = ,
+    logical = atomic2Fortran(e),
 
-          res
+    symbol = {
+      s <- as.character(e)
+      # logicals that come in from R are passed as integer types,
+      # so for all fortran ops we cast to logical with /=0
+      if (
+        !is.null(scope[[e]] -> val) &&
+          val@mode == "logical" &&
+          val@is_external
+      ) {
+        s <- paste0("(", s, "/=0)")
+      }
+      Fortran(s, value = scope[[e]])
+    },
 
+    ## handling 'object' and 'closure' here are both bad ideas,
+    ## TODO: delete both
+    # "object" = {
+    #   if (inherits(e, Variable))
+    #     e <- Fortran(character(), e)
+    #   stopifnot(inherits(e, Fortran))
+    #   e
+    # },
+
+    closure = {
+      if (is.null(name <- attr(e, "name", TRUE))) {
+        name <- if (is.symbol(name <- substitute(e))) {
+          as.character(name)
         } else {
-
-          handler(as.list(e)[-1L], scope, ...,
-                  calls = c(calls, as.character(callable)),
-                  hoist = hoist)
-
+          "anonymous_function"
         }
+      }
 
-      },
+      stopifnot(is.null(scope))
+      new_fortran_subroutine(name, e)
+    },
 
-      integer = ,
-      double = ,
-      complex = ,
-      logical =  atomic2Fortran(e),
-
-      symbol = {
-        s <- as.character(e)
-        # logicals that come in from R are passed as integer types,
-        # so for all fortran ops we cast to logical with /=0
-        if (
-          !is.null(scope[[e]] -> val) &&
-            val@mode == "logical" &&
-            val@is_external
-        ) {
-          s <- paste0("(", s, "/=0)")
-        }
-        Fortran(s, value = scope[[e]])
-      },
-
-      ## handling 'object' and 'closure' here are both bad ideas,
-      ## TODO: delete both
-      # "object" = {
-      #   if (inherits(e, Variable))
-      #     e <- Fortran(character(), e)
-      #   stopifnot(inherits(e, Fortran))
-      #   e
-      # },
-
-      closure = {
-        if (is.null(name <- attr(e, "name", TRUE))) {
-          name <- if (is.symbol(name <- substitute(e)))
-            as.character(name)
-          else
-            "anonymous_function"
-        }
-
-        stopifnot(is.null(scope))
-        new_fortran_subroutine(name, e)
-      },
-
-      ## all the other typeof() possible values
-      # "character",
-      # "raw" ,
-      # "list",
-      # "NULL",
-      # "function",
-      # "special",
-      # "builtin",
-      # "environment",
-      # "S4",
-      # "pairlist",
-      # "promise",
-      # "char",
-      # "...",
-      # "any",
-      # "expression",
-      # "externalptr",
-      # "bytecode",
-      # "weakref"
-      # default
-      stop("Unsupported object type encountered: ", typeof(e))
-    )
+    ## all the other typeof() possible values
+    # "character",
+    # "raw" ,
+    # "list",
+    # "NULL",
+    # "function",
+    # "special",
+    # "builtin",
+    # "environment",
+    # "S4",
+    # "pairlist",
+    # "promise",
+    # "char",
+    # "...",
+    # "any",
+    # "expression",
+    # "externalptr",
+    # "bytecode",
+    # "weakref"
+    # default
+    stop("Unsupported object type encountered: ", typeof(e))
+  )
 
   if (length(hoisted)) {
     combined <- str_flatten_lines(c(hoisted, fortran))
@@ -142,11 +155,13 @@ lang2fortran <- r2f <- function(e, scope = NULL, ..., calls = character(), hoist
 
 atomic2Fortran <- function(x) {
   stopifnot(is_scalar_atomic(x))
-  s <- switch(typeof(x),
-              double =,
-              integer = num2fortran(x),
-              logical = if (x) ".true." else ".false.",
-              complex = sprintf("(%s, %s)", num2fortran(Re(x)), num2fortran(Im(x))))
+  s <- switch(
+    typeof(x),
+    double = ,
+    integer = num2fortran(x),
+    logical = if (x) ".true." else ".false.",
+    complex = sprintf("(%s, %s)", num2fortran(Re(x)), num2fortran(Im(x)))
+  )
   Fortran(s, Variable(typeof(x)))
 }
 
@@ -156,11 +171,14 @@ num2fortran <- function(x) {
   nsmall <- switch(typeof(x), integer = 0L, double = 1L)
   repeat {
     s <- format.default(x, digits = digits, nsmall = nsmall, scientific = 1L)
-    if (x == eval(str2lang(s))) # eval() needed for negative and complex numbers
+    if (x == eval(str2lang(s))) {
+      # eval() needed for negative and complex numbers
       break
+    }
     add(digits) <- 1L
-    if (digits > 22L)
+    if (digits > 22L) {
       stop("number formatting error: ", x, " formatted as : ", s)
+    }
   }
   paste0(s, switch(typeof(x), double = "_c_double", integer = "_c_int"))
 }
@@ -168,9 +186,11 @@ num2fortran <- function(x) {
 
 r2f_handlers := new.env(parent = emptyenv())
 
+
 get_r2f_handler <- function(name) {
   stopifnot("All functions called must be named as symbols" = is.symbol(name))
-  get0(name, r2f_handlers) %||% stop("Unsupported function: ", name, call. = FALSE)
+  get0(name, r2f_handlers) %||%
+    stop("Unsupported function: ", name, call. = FALSE)
 }
 
 r2f_default_handler <- function(args, scope = NULL, ..., calls) {
@@ -183,21 +203,20 @@ r2f_default_handler <- function(args, scope = NULL, ..., calls) {
 
 ## ??? export as S7::convert() methods?
 register_r2f_handler <- function(name, fun) {
-  stopifnot(
-    is_string(name),
-    identical(formals(fun), alist(x = , scope = NULL))
-  )
-
-  r2f_handlers[[name]] <- fun
+  for (nm in name) {
+    r2f_handlers[[nm]] <- fun
+  }
+  invisible(fun)
 }
 
 .r2f_handler_not_implemented_yet <- function(e, scope, ...) {
-  stop(gettextf("'%s' is not implemented yet", as.character(e[[1L]])),
-       call. = FALSE)
+  stop(
+    gettextf("'%s' is not implemented yet", as.character(e[[1L]])),
+    call. = FALSE
+  )
 }
 
 r2f_handlers[["declare"]] <- function(args, scope, ...) {
-
   for (a in args) {
     if (is_missing(a)) {
       next
@@ -216,8 +235,9 @@ r2f_handlers[["declare"]] <- function(args, scope, ...) {
 
 
 r2f_handlers[["Fortran"]] <- function(args, scope = NULL, ...) {
-  if (!is_string(args[[1]]))
+  if (!is_string(args[[1]])) {
     stop("Fortran() must be called with a string")
+  }
   Fortran(args[[1]])
   # enable passing through literal fortran code
   # used like:
@@ -241,9 +261,7 @@ r2f_handlers[["{"]] <- function(args, scope, ..., hoist = NULL) {
 }
 
 
-
 # ---- reduction intrinsics ----
-
 
 create_mask_hoist <- function() {
   .hoisted_mask <- NULL
@@ -268,72 +286,92 @@ create_mask_hoist <- function() {
   environment()
 }
 
-
-r2f_handlers[["max"]] <-
-r2f_handlers[["min"]] <-
-r2f_handlers[["sum"]] <-
-r2f_handlers[["prod"]] <- function(args, scope, ...) {
-  intrinsic <- switch(last(list(...)$calls),
-                      max = "maxval",
-                      min = "minval",
-                      sum = "sum",
-                      prod = "product")
-
-  reduce_arg <- function(arg) {
-    mask_hoist <- create_mask_hoist()
-    x <- r2f(arg, scope, ..., hoist_mask = mask_hoist$try_set)
-    hoisted_mask <- mask_hoist$get_hoisted()
-    s <- glue(
-      if (is.null(hoisted_mask))
-        "{intrinsic}({x})"
-      else
-        "{intrinsic}({x}, mask = {hoisted_mask})"
+register_r2f_handler(
+  c("max", "min", "sum", "prod"),
+  function(
+    args,
+    scope,
+    ...
+  ) {
+    intrinsic <- switch(
+      last(list(...)$calls),
+      max = "maxval",
+      min = "minval",
+      sum = "sum",
+      prod = "product"
     )
-    Fortran(s, Variable(x@value@mode))
-  }
 
-  if (length(args) == 1) {
-    reduce_arg(args[[1]])
-  } else {
-    args <- lapply(args, reduce_arg)
-    mode <- reduce_promoted_mode(args)
-    s <- switch(last(list(...)$calls),
-      max = glue("max({str_flatten_commas(args)})"),
-      min = glue("min({str_flatten_commas(args)})"),
-      sum = glue("({str_flatten(args, ' + ')})"),
-      prod = glue("({str_flatten(args, ' * ')})")
+    reduce_arg <- function(arg) {
+      mask_hoist <- create_mask_hoist()
+      x <- r2f(arg, scope, ..., hoist_mask = mask_hoist$try_set)
+      if (x@value@rank == 0) {
+        return(x)
+      }
+      hoisted_mask <- mask_hoist$get_hoisted()
+      s <- glue(
+        if (is.null(hoisted_mask)) {
+          "{intrinsic}({x})"
+        } else {
+          "{intrinsic}({x}, mask = {hoisted_mask})"
+        }
+      )
+      Fortran(s, Variable(x@value@mode))
+    }
+
+    if (length(args) == 1) {
+      reduce_arg(args[[1]])
+    } else {
+      args <- lapply(args, reduce_arg)
+      mode <- reduce_promoted_mode(args)
+      s <- switch(
+        last(list(...)$calls),
+        max = glue("max({str_flatten_commas(args)})"),
+        min = glue("min({str_flatten_commas(args)})"),
+        sum = glue("({str_flatten(args, ' + ')})"),
+        prod = glue("({str_flatten(args, ' * ')})")
+      )
+      Fortran(s, Variable(mode))
+    }
+  }
+)
+
+
+r2f_handlers[["which.max"]] <- r2f_handlers[["which.min"]] <-
+  function(args, scope = NULL, ...) {
+    stopifnot(length(args) == 1)
+    x <- r2f(args[[1L]], scope, ...)
+    stopifnot(
+      "Values passed to which.max()/which.min() must be 1d arrays" = x@value@rank ==
+        1
     )
-    Fortran(s, Variable(mode))
-  }
-}
+    valout <- Variable(mode = "integer") # integer scalar
 
+    if (x@value@mode == "logical") {
+      val <- switch(
+        last(list(...)$calls),
+        which.max = ".true.",
+        which.min = ".false."
+      )
+      f <- glue("findloc({x}, {val}, 1)")
+    } else {
+      intrinsic <- switch(
+        last(list(...)$calls),
+        which.max = "maxloc",
+        which.min = "minloc"
+      )
+      f <- glue("{intrinsic}({x}, 1)")
+    }
 
-r2f_handlers[["which.max"]] <-
-r2f_handlers[["which.min"]] <-
-function(args, scope = NULL, ...) {
-  stopifnot(length(args) == 1)
-  x <- r2f(args[[1L]], scope, ...)
-  stopifnot("Values passed to which.max()/which.min() must be 1d arrays" = x@value@rank == 1)
-  valout <- Variable(mode = "integer") # integer scalar
-
-  if (x@value@mode == "logical") {
-    val <- switch(last(list(...)$calls),
-                  which.max = ".true.",
-                  which.min = ".false.")
-    f <- glue("findloc({x}, {val}, 1)")
-  } else {
-    intrinsic <- switch(last(list(...)$calls),
-                        which.max = "maxloc",
-                        which.min = "minloc")
-    f <- glue("{intrinsic}({x}, 1)")
+    Fortran(f, valout)
   }
 
-  Fortran(f, valout)
-}
 
-
-r2f_handlers[["["]] <- function(args, scope, ..., hoist_mask = function(mask) FALSE) {
-
+r2f_handlers[["["]] <- function(
+  args,
+  scope,
+  ...,
+  hoist_mask = function(mask) FALSE
+) {
   # only a subset of R's x[...] features can be translated here. `...` can only be:
   # - a single logical mask, of the same rank as `x`. returns a rank 1 vector.
   # - a number of arguments matching the rank of `x`, with each being
@@ -345,24 +383,43 @@ r2f_handlers[["["]] <- function(args, scope, ..., hoist_mask = function(mask) FA
 
   idxs <- whole_doubles_to_ints(args[-1])
   idxs <- imap(idxs, function(idx, i) {
-    if (is_missing(idx))
+    if (is_missing(idx)) {
       Fortran(":", Variable("integer", var@value@dims[[i]]))
-    else
-      r2f(idx, scope, ...)
+    } else {
+      sub <- r2f(idx, scope, ...)
+      if (sub@value@mode == "double") {
+        # Fortran subscripts must be integers; coerce numeric expressions
+        Fortran(
+          glue("int({sub}, kind=c_ptrdiff_t)"),
+          Variable("integer", sub@value@dims)
+        )
+      } else {
+        sub
+      }
+    }
   })
 
-  if (length(idxs) == 1 &&
+  if (
+    length(idxs) == 1 &&
       idxs[[1]]@value@mode == "logical" &&
-      idxs[[1]]@value@rank == var@value@rank) {
+      idxs[[1]]@value@rank == var@value@rank
+  ) {
     mask <- idxs[[1]]
-    if (hoist_mask(mask))
+    if (hoist_mask(mask)) {
       return(var)
-    return(Fortran(glue("pack({var}, {mask})"), Variable(var@value@mode, dims = NA)))
+    }
+    return(Fortran(
+      glue("pack({var}, {mask})"),
+      Variable(var@value@mode, dims = NA)
+    ))
   }
 
-  if (length(idxs) != var@value@rank)
-    stop("number of args to x[...] must match the rank of x, received:",
-         deparse1(as.call(c(quote(`[`,args )))))
+  if (length(idxs) != var@value@rank) {
+    stop(
+      "number of args to x[...] must match the rank of x, received:",
+      deparse1(as.call(c(quote(`[`, args))))
+    )
+  }
 
   drop <- args$drop %||% TRUE
 
@@ -382,10 +439,11 @@ r2f_handlers[["["]] <- function(args, scope, ..., hoist_mask = function(mask) FA
         return(Fortran(f, Variable("int", NA)))
       },
       integer0 = {
-        if (drop)
+        if (drop) {
           subscript
-        else
+        } else {
           Fortran(glue("{subscript}:{subscript}"), Variable("int", 1))
+        }
       },
       integer1 = {
         subscript
@@ -394,15 +452,14 @@ r2f_handlers[["["]] <- function(args, scope, ..., hoist_mask = function(mask) FA
       # double1 = { },
       stop(
         "all args to x[...] must be logical or integer of rank 0 or 1",
-        deparse1(as.call(c(quote(`[`, args ))))
-        )
+        deparse1(as.call(c(quote(`[`, args))))
+      )
     )
   })
 
   dims <- drop_nulls(lapply(idxs, \(idx) idx@value@dims[[1]]))
   outval <- Variable(var@value@mode, dims)
   Fortran(glue("{var}({str_flatten_commas(idxs)})"), outval)
-
 }
 
 
@@ -436,7 +493,6 @@ r2f_handlers[["seq"]] <- function(args, scope, ...) {
     stop("seq(length.out=, along.with=) not implemented yet")
   }
 
-
   .[from, to, by] <- lapply(args, r2f, scope, ...)[c("from", "to", "by")]
   by <- by %||% Fortran(glue("sign(1, {to}-{from})"), Variable("integer"))
 
@@ -446,10 +502,13 @@ r2f_handlers[["seq"]] <- function(args, scope, ...) {
   #
   # e.g., i <- scope@get_unique_var("integer")
   # glue("[({i} * by, {i} = int(from/by), int(to/by))]")
-  if (from@value@mode != "integer" ||
-     to@value@mode != "integer" ||
-     by@value@mode != "integer")
+  if (
+    from@value@mode != "integer" ||
+      to@value@mode != "integer" ||
+      by@value@mode != "integer"
+  ) {
     stop("non-integer seq()'s not implemented yet.")
+  }
 
   # depending on context, this translation can vary.
   #
@@ -471,15 +530,12 @@ r2f_handlers[["seq"]] <- function(args, scope, ...) {
 }
 
 
-
-
 r2f_handlers[["ifelse"]] <- function(args, scope, ...) {
   .[mask, tsource, fsource] <- lapply(args, r2f, scope, ...)
   # (tsource, fsource, mask)
   mode <- tsource@value@mode
   dims <- conform(mask@value, tsource@value, fsource@value)@dims
-  Fortran(glue("merge({tsource}, {fsource}, {mask})"),
-          Variable(mode, dims))
+  Fortran(glue("merge({tsource}, {fsource}, {mask})"), Variable(mode, dims))
 }
 
 
@@ -493,27 +549,32 @@ r2f_handlers[["abs"]] <- function(args, scope, ...) {
 # ---- pure elemental unary math intrinsics ----
 
 ## real and complex intrinsics
-r2f_handlers[["sin"]] <-
-r2f_handlers[["cos"]] <-
-r2f_handlers[["tan"]] <-
-r2f_handlers[["asin"]] <-
-r2f_handlers[["acos"]] <-
-r2f_handlers[["atan"]] <-
-r2f_handlers[["sqrt"]] <-
-r2f_handlers[["exp"]] <-
-r2f_handlers[["log"]] <-
-r2f_handlers[["floor"]] <-
-r2f_handlers[["ceiling"]] <- function(args, scope, ...) {
-  stopifnot(length(args) == 1L)
-  arg <- r2f(args[[1]], scope, ...)
-  intrinsic <- last(list(...)$calls)
-  Fortran(glue("{intrinsic}({arg})"), arg@value)
-}
+register_r2f_handler(
+  c(
+    "sin",
+    "cos",
+    "tan",
+    "asin",
+    "acos",
+    "atan",
+    "sqrt",
+    "exp",
+    "log",
+    "floor",
+    "ceiling"
+  ),
+  function(args, scope, ...) {
+    stopifnot(length(args) == 1L)
+    arg <- r2f(args[[1]], scope, ...)
+    intrinsic <- last(list(...)$calls)
+    Fortran(glue("{intrinsic}({arg})"), arg@value)
+  }
+)
 
 r2f_handlers[["log10"]] <- function(args, scope, ...) {
   stopifnot(length(args) == 1L)
   arg <- r2f(args[[1]], scope, ...)
-  f <- if(arg@value@mode == "complex") {
+  f <- if (arg@value@mode == "complex") {
     glue("(log({arg}) / log(10.0_c_double))")
   } else {
     glue("log10({arg})")
@@ -525,8 +586,9 @@ r2f_handlers[["log10"]] <- function(args, scope, ...) {
 r2f_handlers[["abs"]] <- function(args, scope, ...) {
   stopifnot(length(args) == 1L)
   arg <- r2f(args[[1]], scope, ...)
-  if(arg@value@mode == "complex")
+  if (arg@value@mode == "complex") {
     arg@value@mode <- "double"
+  }
   Fortran(glue("abs({arg})"), arg@value)
 }
 
@@ -577,8 +639,23 @@ r2f_handlers[["Conj"]] <- function(args, scope, ...) {
 }
 
 
-
 # ---- elemental binary infix operators ----
+
+maybe_cast_double <- function(x) {
+  if (x@value@mode == "logical") {
+    Fortran(
+      glue("merge(1_c_double, 0_c_double, {x})"),
+      Variable("double", x@value@dims)
+    )
+  } else if (x@value@mode == "integer") {
+    Fortran(
+      glue("real({x}, kind=c_double)"),
+      Variable("double", x@value@dims)
+    )
+  } else {
+    x
+  }
+}
 
 r2f_handlers[["+"]] <- function(args, scope, ...) {
   .[left, right] <- lapply(args, r2f, scope, ...)
@@ -597,7 +674,14 @@ r2f_handlers[["*"]] <- function(args, scope = NULL, ...) {
 
 r2f_handlers[["/"]] <- function(args, scope = NULL, ...) {
   .[left, right] <- lapply(args, r2f, scope, ...)
+  left <- maybe_cast_double(left)
+  right <- maybe_cast_double(right)
   Fortran(glue("({left} / {right})"), conform(left@value, right@value))
+}
+
+r2f_handlers[["as.double"]] <- function(args, scope = NULL, ...) {
+  stopifnot(length(args) == 1L)
+  maybe_cast_double(r2f(args[[1]], scope, ...))
 }
 
 r2f_handlers[["^"]] <- function(args, scope, ...) {
@@ -644,69 +728,101 @@ r2f_handlers[["!="]] <- function(args, scope, ...) {
 }
 
 
-r2f_handlers[["%%"]] <- r2f_handlers[["%/%"]] <-
-  .r2f_handler_not_implemented_yet
+# ---- remainder (%%) and integer division (%/%) ----
+#
+# R semantics:
+#   x %%  y  ==  r   where  r has the sign of y  (divisor)
+#   x %/% y  ==  q   where  q = floor(x / y)
+# and  x == r + y * q  (within rounding error)
+#
+# Fortran intrinsics:
+#   - MODULO(a,p)   : remainder with sign(p)
+#   - FLOOR(x)      : greatest integer ≤ x      (real)
+#   - AINT(x)       : truncation toward 0       (real)
 
+r2f_handlers[["%%"]] <- function(args, scope, ...) {
+  .[left, right] <- lapply(args, r2f, scope, ...)
+  out_val <- conform(left@value, right@value)
+  # MODULO gives result with sign(right) – matches R %% behaviour
+  Fortran(glue("modulo({left}, {right})"), out_val)
+}
+
+r2f_handlers[["%/%"]] <- function(args, scope, ...) {
+  .[left, right] <- lapply(args, r2f, scope, ...)
+  out_val <- conform(left@value, right@value)
+
+  expr <- switch(
+    out_val@mode,
+    integer = glue("int(floor(real({left}) / real({right})))"),
+    double = glue("floor({left} / {right})"),
+    stop("%/% only implemented for numeric types")
+  )
+
+  Fortran(expr, out_val)
+}
 
 
 # TODO: the scalar || probably need some more type checking.
-# TODO: gfortan supports implicit casting that of logical to integer when
+# TODO: gfortran supports implicit casting that of logical to integer when
 # assigning a logical to a variable declared integer, converting `.true.` to `1`,
 # but this is not a standard language feature, and Intel's `ifort` uses `-1` for `.true`.
 # We should explicitly use
 #   `merge(1_c_int, 0_c_int, <lgl>)` to cast logical to int.
-r2f_handlers[["&"]] <-
-r2f_handlers[["&&"]] <-
-r2f_handlers[["|"]] <-
-r2f_handlers[["||"]] <-
-function(args, scope, ...) {
-  args <- lapply(args, r2f, scope, ...)
-  args <- lapply(args, function(a) {
-    if (a@value@mode != "logical") {
-      stop("must be logical")
-    }
-    a
-  })
-  .[left, right] <- args
+register_r2f_handler(
+  c("&", "&&", "|", "||"),
+  function(args, scope, ...) {
+    args <- lapply(args, r2f, scope, ...)
+    args <- lapply(args, function(a) {
+      if (a@value@mode != "logical") {
+        stop("must be logical")
+      }
+      a
+    })
+    .[left, right] <- args
 
-  operator <- switch(last(list(...)$calls),
-                     `&` = , `&&` = ".and.",
-                     `|` = , `||` = ".or.")
+    operator <- switch(
+      last(list(...)$calls),
+      `&` = ,
+      `&&` = ".and.",
+      `|` = ,
+      `||` = ".or."
+    )
 
-  s <- glue("{left} {operator} {right}")
-  val <- conform(left@value, right@value)
-  val@mode <- "logical"
-  Fortran(s, val)
-}
-
-
-
+    s <- glue("{left} {operator} {right}")
+    val <- conform(left@value, right@value)
+    val@mode <- "logical"
+    Fortran(s, val)
+  }
+)
 
 # --- constructors  ----
-
 
 r2f_handlers[["c"]] <- function(args, scope = NULL, ...) {
   ff <- lapply(args, r2f, scope, ...)
   s <- glue("[ {str_flatten_commas(ff)} ]")
   lens <- lapply(ff[order(map_int(ff, \(f) f@value@rank))], function(e) {
     rank <- e@value@rank
-    if (rank == 0)
+    if (rank == 0) {
       1L
-    else if (rank == 1)
+    } else if (rank == 1) {
       e@value@dims[[1]]
-    else
+    } else {
       stop("all args passed to c() must be scalars or 1-d arrays")
+    }
   })
   mode <- reduce_promoted_mode(ff)
-  len <- Reduce(\(l1, l2) {
-    if (is_scalar_na(l1) || is_scalar_na(l2)) {
-      NA
-    } else if (is_wholenumber(l1) && is_wholenumber(l2)) {
-      l1 + l2
-    } else {
-      call("+", l1, l2)
-    }
-  }, lens)
+  len <- Reduce(
+    \(l1, l2) {
+      if (is_scalar_na(l1) || is_scalar_na(l2)) {
+        NA
+      } else if (is_wholenumber(l1) && is_wholenumber(l2)) {
+        l1 + l2
+      } else {
+        call("+", l1, l2)
+      }
+    },
+    lens
+  )
   Fortran(s, Variable(mode, list(len)))
 }
 
@@ -715,15 +831,15 @@ r2f_handlers[["cbind"]] <- function(e, scope) {
   .NotYetImplemented()
   ee <- lapply(e[-1], r2f, scope)
   ncols <- lapply(ee, function(f) {
-    if (f@value@rank %in% c(0, 1))
+    if (f@value@rank %in% c(0, 1)) {
       1
-    else if (f@value@rank == 2)
+    } else if (f@value@rank == 2) {
       f@value@dims[[2]]
+    }
   })
   ncols <- Reduce(\(a, b) call("+", a, b), ncols)
   ncols <- eval(ncols, scope@sizes)
 }
-
 
 
 r2f_handlers[["<-"]] <- function(args, scope, ...) {
@@ -752,7 +868,6 @@ r2f_handlers[["<-"]] <- function(args, scope, ...) {
     var <- value@value
     var@name <- name
     scope[[name]] <- var
-
   } else {
     # The var already exists, this assignment is a modification / reassignment
     check_assignment_compatible(var, value@value)
@@ -768,7 +883,6 @@ r2f_handlers[["<-"]] <- function(args, scope, ...) {
 
 
 r2f_handlers[["[<-"]] <- function(args, scope = NULL, ...) {
-
   # TODO: handle logical subsetting here, which must become a where a construct like:
   #   x[lgl] <- val
   # becomes
@@ -789,26 +903,28 @@ r2f_handlers[["[<-"]] <- function(args, scope = NULL, ...) {
 }
 
 reduce_promoted_mode <- function(...) {
-
   getmode <- function(d) {
-    if (inherits(d, Fortran))
+    if (inherits(d, Fortran)) {
       d <- d@value
-    if (inherits(d, Variable))
+    }
+    if (inherits(d, Variable)) {
       return(d@mode)
-    if (is.list(d) && length(d))
+    }
+    if (is.list(d) && length(d)) {
       lapply(d, getmode)
+    }
   }
   modes <- unique(unlist(getmode(list(...))))
 
-  if ("double" %in% modes)
+  if ("double" %in% modes) {
     "double"
-  else if ("integer" %in% modes)
+  } else if ("integer" %in% modes) {
     "integer"
-  else if ("logical" %in% modes)
+  } else if ("logical" %in% modes) {
     "logical"
-  else
+  } else {
     NULL
-
+  }
 }
 
 
@@ -828,12 +944,44 @@ r2f_handlers[["double"]] <- function(args, scope, ...) {
 
 r2f_handlers[["numeric"]] <- r2f_handlers[["double"]]
 
+r2f_handlers[["runif"]] <- function(args, scope, ..., hoist = NULL) {
+  attr(scope, "uses_rng") <- TRUE
+
+  dims <- r2dims(args$n, scope)
+  var <- Variable("double", dims)
+
+  min <- args$min %||% 0
+  max <- args$max %||% 1
+  default_min <- identical(min, 0) || identical(min, 0L)
+  default_max <- identical(max, 1) || identical(max, 1L)
+
+  if (default_min && default_max) {
+    get1rand <- "unif_rand()"
+  } else if (default_min) {
+    max <- r2f(max, scope, ..., hoist = hoist)
+    get1rand <- glue("unif_rand() * {max}")
+  } else {
+    max <- r2f(max, scope, ..., hoist = hoist)
+    min <- r2f(min, scope, ..., hoist = hoist)
+    get1rand <- glue("({min} + (unif_rand() * ({max} - {min})))")
+  }
+
+  if (passes_as_scalar(var)) {
+    fortran <- get1rand
+  } else {
+    tmp_i <- scope@get_unique_var("integer") ## would be better as uint64...
+    fortran <- glue("[({get1rand}, {tmp_i}=1, {dims[[1L]]})]")
+  }
+
+  Fortran(fortran, var)
+}
+
+
 r2f_handlers[["character"]] <- r2f_handlers[["raw"]] <-
   .r2f_handler_not_implemented_yet
 
 
 r2f_handlers[["matrix"]] <- function(args, scope = NULL, ...) {
-
   args$data %||% stop("matrix(data=) must be provided, cannot be NA")
   out <- r2f(args$data, scope, ...)
   out@value@dims <- r2dims(list(args$nrow, args$ncol), scope)
@@ -841,7 +989,6 @@ r2f_handlers[["matrix"]] <- function(args, scope = NULL, ...) {
 
   # TODO: reshape() if !passes_as_scalar(out)
 }
-
 
 
 conform <- function(..., mode = NULL) {
@@ -854,25 +1001,25 @@ conform <- function(..., mode = NULL) {
       break
     }
   }
-  if (is.null(var))
+  if (is.null(var)) {
     NULL
-  else
+  } else {
     Variable(mode %||% var@mode, var@dims)
- }
-
+  }
+}
 
 
 # ---- printers ----
-
 
 r2f_handlers[["cat"]] <- function(args, scope, ...) {
   args <- lapply(args, r2f, scope, ...)
   # can do a lot more here still, just a POC for now
   stopifnot(length(args) == 1, typeof(args[[1]]) == "character")
   label <- args[[1]]
-  if (!endsWith(label, "\n"))
+  if (!endsWith(label, "\n")) {
     stop("cat(<strings>) must end with '\n'")
-  label <- substring(label, 1, nchar(label)-1)
+  }
+  label <- substring(label, 1, nchar(label) - 1)
 
   Fortran(glue('call labelpr("{label}", {nchar(label)})'))
 }
@@ -885,8 +1032,9 @@ r2f_handlers[["print"]] <- function(args, scope = NULL, ...) {
   name <- args[[1]]
   var <- get(name, envir = scope)
   name <- as.character(name)
-  if (var@mode == "logical")
+  if (var@mode == "logical") {
     name <- sprintf("(%s/=0)", name)
+  }
   label <- ""
   # browser()
   if (passes_as_scalar(var)) {
@@ -897,7 +1045,10 @@ r2f_handlers[["print"]] <- function(args, scope = NULL, ...) {
       logical = ,
       integer = "intpr1",
       double = "dblepr1",
-      {print(var); stop("Unsupported type in print()")}
+      {
+        print(var)
+        stop("Unsupported type in print()")
+      }
     )
 
     Fortran(glue('call {printer}("{label}", {nchar(label)}, {name})'))
@@ -907,10 +1058,15 @@ r2f_handlers[["print"]] <- function(args, scope = NULL, ...) {
       logical = ,
       integer = "intpr",
       double = "dblepr",
-      {print(var); stop("Unsupported type in print()")}
+      {
+        print(var)
+        stop("Unsupported type in print()")
+      }
     )
 
-    Fortran(glue('call {printer}("{label}", {nchar(label)}, {name}, size({name}))'))
+    Fortran(glue(
+      'call {printer}("{label}", {nchar(label)}, {name}, size({name}))'
+    ))
   }
 }
 
@@ -925,22 +1081,29 @@ r2f_handlers[["print"]] <- function(args, scope = NULL, ...) {
 #                 end where"))
 # }
 
-
 r2f_handlers[["length"]] <- function(args, scope, ...) {
   x <- r2f(args[[1]], scope, ...)
   Fortran(glue("size({x})"), Variable("integer"))
 }
-
-
+r2f_handlers[["nrow"]] <- function(args, scope, ...) {
+  x <- r2f(args[[1]], scope, ...)
+  Fortran(glue("size({x}, 1)"), Variable("integer"))
+}
+r2f_handlers[["ncol"]] <- function(args, scope, ...) {
+  x <- r2f(args[[1]], scope, ...)
+  Fortran(glue("size({x}, 2)"), Variable("integer"))
+}
+r2f_handlers[["dim"]] <- function(args, scope, ...) {
+  x <- r2f(args[[1]], scope, ...)
+  Fortran(glue("shape({x})"), Variable("integer", x@value@rank))
+}
 
 
 # this is just `[` handler
-r2f_slice <- function(args, scope, ...) { }
-
+r2f_slice <- function(args, scope, ...) {}
 
 
 # ---- control flow ----
-
 
 r2f_handlers[["if"]] <- function(args, scope, ..., hoist = NULL) {
   # cond uses the current hoist context.
@@ -950,24 +1113,66 @@ r2f_handlers[["if"]] <- function(args, scope, ..., hoist = NULL) {
   true <- r2f(args[[2]], scope, ..., hoist = NULL)
 
   if (length(args) == 2) {
-    Fortran(glue("
+    Fortran(glue(
+      "
       if ({cond}) then
       {indent(true)}
       end if
-      "))
+      "
+    ))
   } else {
     false <- r2f(args[[3]], scope, ..., hoist = NULL)
-    Fortran(glue("
+    Fortran(glue(
+      "
       if ({cond}) then
       {indent(true)}
       else
       {indent(false)}
       end if
-      "))
+      "
+    ))
   }
 }
 
-# TODO: repeat, while, next, return
+
+# TODO: return
+
+# ---- repeat ----
+r2f_handlers[["repeat"]] <- function(args, scope, ...) {
+  stopifnot(length(args) == 1L)
+  body <- r2f(args[[1]], scope, ...)
+  Fortran(glue(
+    "do
+    {indent(body)}
+    end do
+    "
+  ))
+}
+
+# ---- break ----
+r2f_handlers[["break"]] <- function(args, scope, ...) {
+  stopifnot(length(args) == 0L)
+  Fortran("exit")
+}
+
+# ---- break ----
+r2f_handlers[["next"]] <- function(args, scope, ...) {
+  stopifnot(length(args) == 0L)
+  Fortran("cycle")
+}
+
+# ---- while ----
+r2f_handlers[["while"]] <- function(args, scope, ...) {
+  stopifnot(length(args) == 2L)
+  cond <- r2f(args[[1]], scope, ...)
+  body <- r2f(args[[2]], scope, ...) ## should we set a new hoist target here?
+  Fortran(glue(
+    "do while ({cond})
+    {indent(body)}
+    end do
+    "
+  ))
+}
 
 ## ---- for ----
 r2f_iterable <- function(e, scope, ...) {
@@ -982,29 +1187,33 @@ r2f_iterable <- function(e, scope, ...) {
 }
 
 
-
-
 r2f_handlers[["for"]] <- function(args, scope, ...) {
   .[var, iterable, body] <- args
   stopifnot(is.symbol(var))
   var <- as.character(var)
   scope[[var]] <- Variable(mode = "integer", name = var)
 
-  iterable <- r2f_iterable_handlers[[as.character(iterable[[1]])]](iterable, scope)
+  iterable <- r2f_iterable_handlers[[as.character(iterable[[1]])]](
+    iterable,
+    scope
+  )
   body <- r2f(body, scope, ...)
 
   Fortran(glue(
     "do {var} = {iterable}
     {indent(body)}
     end do
-    "))
+    "
+  ))
 }
 
 r2f_iterable_handlers := new.env()
 
-r2f_iterable_handlers[["seq_len"]] <-  function(e, scope, ...) {
+r2f_iterable_handlers[["seq_len"]] <- function(e, scope, ...) {
   x <- as.list(e)[-1]
-  if (length(x) != 1) stop("too many args to seq_len()")
+  if (length(x) != 1) {
+    stop("too many args to seq_len()")
+  }
   x <- x[[1]]
   start <- 1L
   end <- r2f(x)
@@ -1012,24 +1221,25 @@ r2f_iterable_handlers[["seq_len"]] <-  function(e, scope, ...) {
 }
 
 r2f_iterable_handlers[["seq"]] <- function(e, scope) {
-
   ee <- match.call(seq.default, e)
   ee <- whole_doubles_to_ints(ee)
 
   start <- r2f(ee$from, scope)
   end <- r2f(ee$to, scope)
-  step <- if (is.null(ee$by))
+  step <- if (is.null(ee$by)) {
     glue("sign(1, {end}-{start})")
-  else
+  } else {
     r2f(ee$by, scope)
+  }
 
   str_flatten_commas(
-   start, end, step
+    start,
+    end,
+    step
   )
 }
 
 r2f_iterable_handlers[[":"]] <- function(e, scope) {
-
   ee <- whole_doubles_to_ints(e)
   .[start, end] <- as.list(ee)[-1] |> lapply(r2f, scope)
 
@@ -1037,13 +1247,14 @@ r2f_iterable_handlers[[":"]] <- function(e, scope) {
 }
 
 
-
 r2f_iterable_handlers[["seq_along"]] <- function(e, scope) {
   x <- as.list(e)[-1]
-  if (length(x) != 1) stop("too many args to seq_along()")
+  if (length(x) != 1) {
+    stop("too many args to seq_along()")
+  }
   x <- x[[1]]
   start <- 1
-  end <-  sprintf("size(%s)", r2f(x, scope))
+  end <- sprintf("size(%s)", r2f(x, scope))
   glue("{start}, {end}")
 }
 
@@ -1051,6 +1262,7 @@ r2f_iterable_handlers[["seq_along"]] <- function(e, scope) {
 # ---- helpers ----
 
 check_call <- function(e, nargs) {
-  if (length(e) != (nargs+1L))
+  if (length(e) != (nargs + 1L)) {
     stop("Too many args to: ", as.character(e[[1L]]))
+  }
 }

@@ -3,7 +3,10 @@
 #' Compile an R function.
 #'
 #' @param fun An R function
-#' @param name Optional string, name to use for the function.
+#' @param name String, name to use for the function. This is optional in
+#'   regular usage but required in an R package. As a convenience, arguments
+#'   `fun` and `name` can also be supplied as positional arguments to `quick` with
+#'   `name` in the first position.
 #'
 #' @details
 #'
@@ -12,8 +15,9 @@
 #' The shape and mode of all function arguments must be declared. Local and
 #' return variables may optionally also be declared.
 #'
-#' `declare(type())` also has support for declaring size constraints, or size
-#' relationships between variables. Here are some examples of declare calls:
+#' `declare(type())` also has support for declaring size constraints, or
+#' size relationships between variables. Here are some examples of declare
+#' calls:
 #'
 #' ```r
 #' declare(type(x = double(NA))) # x is a 1-d double vector of any length
@@ -64,11 +68,11 @@
 #'
 #' ## Return values
 #'
-#' The shape and type of a function return value must be known at compile time.
-#' In most situations, this will be automatically inferred by `quick()`. However,
-#' if the output is dynamic, then you may need to provide a hint.
-#' For example, returning the result of `seq()` will fail because the output shape
-#' cannot be inferred.
+#' The shape and type of a function return value must be known at compile
+#' time. In most situations, this will be automatically inferred by
+#' `quick()`. However, if the output is dynamic, then you may need to
+#' provide a hint. For example, returning the result of `seq()` will fail
+#' because the output shape cannot be inferred.
 #'
 #' ```r
 #' # Will fail to compile:
@@ -82,8 +86,8 @@
 #' })
 #' ```
 #'
-#' However, if the output size can be declared as a dynamic expression using other
-#' values known at runtime, compilation will succeed:
+#' However, if the output size can be declared as a dynamic expression using
+#' other values known at runtime, compilation will succeed:
 #'
 #' ```r
 #' # Succeeds:
@@ -102,19 +106,24 @@
 #' @returns A quicker R function.
 #' @export
 #' @examples
+#' \donttest{
 #' add_ab <- quick(function(a, b) {
 #'   declare(type(a = double(n)),
 #'           type(b = double(n)))
-#'   out <- a + b
-#'   out
+#'   a + b
 #' })
 #' add_ab(1, 2)
+#' add_ab(c(1, 2, 3), c(4, 5, 6))
+#' }
 quick <- function(fun, name = NULL) {
   if (is.null(name)) {
-    name <- if (is.symbol(substitute(fun)))
+    name <- if (is.symbol(substitute(fun))) {
       deparse(substitute(fun))
-    else
+    } else {
       make_unique_name(prefix = "anonymous_quick_function_")
+    }
+  } else if (is.function(name) && is_string(fun)) {
+    .[name, fun] <- list(fun, name)
   }
 
   if (nzchar(pkgname <- Sys.getenv("DEVTOOLS_LOAD"))) {
@@ -142,6 +151,12 @@ quick <- function(fun, name = NULL) {
 
   pkgname <- parent.pkg()
   if (!is.null(pkgname) && pkgname != "quickr") {
+    if (startsWith(name, 'anonymous_quick_function_')) {
+      stop(
+        'When used in an R package, you must provide a unique `name` to every `quick()` call.\n',
+        'For example: `my_fun <- quick("my_fun", function(x) ....)'
+      )
+    }
     # we are in a package - but outside a quickr::compile_package() call.
     return(create_quick_closure(name, fun))
   }
@@ -160,9 +175,12 @@ compile <- function(fsub, build_dir = tempfile(paste0(fsub@name, "-build-"))) {
   name <- fsub@name
   c_wrapper <- make_c_bridge(fsub)
 
-  if (dir.exists(build_dir)) unlink(build_dir, recursive = T)
-  if (!dir.exists(build_dir))
+  if (dir.exists(build_dir)) {
+    unlink(build_dir, recursive = T)
+  }
+  if (!dir.exists(build_dir)) {
     dir.create(build_dir)
+  }
   owd <- setwd(build_dir)
   on.exit(setwd(owd))
 
@@ -176,13 +194,17 @@ compile <- function(fsub, build_dir = tempfile(paste0(fsub@name, "-build-"))) {
     result <- system2(
       R.home("bin/R"),
       c("CMD SHLIB --use-LTO", "-o", dll_path, fsub_path, c_wrapper_path),
-      stdout = TRUE, stderr = TRUE
+      stdout = TRUE,
+      stderr = TRUE
     )
   })
-  if (!is.null(attr(result, "status"))) {
+  if (!is.null(status <- attr(result, "status"))) {
+    # Adjust the compiler error so RStudio console formatter doesn't mangle
+    # the actual error message https://github.com/rstudio/rstudio/issues/16365
+    result <- gsub("Error: ", "Compiler Error: ", result, fixed = TRUE)
     writeLines(result, stderr())
-    str(attributes(result))
-    stop("Compilation Error")
+    cat("---\nCompiler exit status:", status, "\n", file = stderr())
+    stop("Compilation Error", call. = FALSE)
   }
 
   # tryCatch(dyn.unload(dll_path), error = identity)
@@ -194,35 +216,52 @@ compile <- function(fsub, build_dir = tempfile(paste0(fsub@name, "-build-"))) {
 }
 
 
-
-create_quick_closure <- function(name, closure,
-                                 native_symbol = as.name(paste0(name, "_"))) {
-  body(closure) <- as.call(c(quote(.External), native_symbol,
-                             lapply(names(formals(closure)), as.name)))
+create_quick_closure <- function(
+  name,
+  closure,
+  native_symbol = as.name(paste0(name, "_"))
+) {
+  body(closure) <- as.call(c(
+    quote(.External),
+    native_symbol,
+    lapply(names(formals(closure)), as.name)
+  ))
   closure
 }
 
 
-
 check_all_var_names_valid <- function(fun) {
   nms <- unique(c(names(formals(fun)), all.vars(body(fun), functions = FALSE)))
-  invalid <- endsWith(nms, "_") | startsWith(nms, "_") | nms %in% c(
+  invalid <- endsWith(nms, "_") |
+    startsWith(nms, "_") |
+    nms %in%
+      c(
+        # clashes with Fortran subroutine symbols
+        "c_int",
+        "c_double",
+        "c_ptrdiff_t",
 
-    # clashes with Fortran subroutine symbols
-    "c_int", "c_double", "c_ptrdiff_t",
+        # clashes with C bridge symbols
+        "int" #, "double",
 
-    # clashes with C bridge symbols
-    "int" #, "double",
-
-    # ??? (clashes with R symbols?)
-    # "double", "integer"
-  )
+        # ??? (clashes with R symbols?)
+        # "double", "integer"
+      )
   if (any(invalid)) {
-    stop("symbols cannot start or end with '_', but found: ",
-         glue_collapse(invalid, ", ", last = ", and "))
+    stop(
+      "symbols cannot start or end with '_', but found: ",
+      glue_collapse(invalid, ", ", last = ", and ")
+    )
+  }
+
+  case_clashes <- nms[is_duplicate(tolower(nms))]
+  if (length(case_clashes)) {
+    stop(
+      "Fortran is case-insensitive; these names conflict when case is ignored: ",
+      glue_collapse(glue::backtick(case_clashes), ", ", last = " and ")
+    )
   }
 }
-
 
 
 # ---- utils ----
@@ -233,3 +272,9 @@ make_unique_name <- local({
     paste0(prefix, i <<- i + 1L)
   }
 })
+
+is_duplicate <- function(x) {
+  out <- duplicated(x) | duplicated(x, fromLast = TRUE)
+  names(out) <- names(x)
+  out
+}

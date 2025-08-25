@@ -1,5 +1,3 @@
-
-
 scrub_environment <- function(x) {
   gsub("environment: 0x[0-9a-f]+", "environment: 0x0", x)
 }
@@ -9,12 +7,14 @@ expect_translation_snapshots <- function(fn, name = deparse(substitute(fn))) {
   fsub <- r2f(fn)
   cwrapper <- make_c_bridge(fsub)
 
-  expect_snapshot({
-    fn
-    cat(fsub)
-    cat(cwrapper)
-  }, transform = scrub_environment)
-
+  expect_snapshot(
+    {
+      fn
+      cat(fsub)
+      cat(cwrapper)
+    },
+    transform = scrub_environment
+  )
 }
 
 expect_quick_identical <- function(fn, ...) {
@@ -46,4 +46,9 @@ expect_quick_equal <- function(fn, ...) {
 assign_in_global <- function(...) {
   x <- rlang::dots_list(..., .named = TRUE)
   list2env(x, envir = globalenv())
+}
+
+set_seed_and_call <- function(fun, ...) {
+  set.seed(1234)
+  fun(...)
 }
