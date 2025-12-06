@@ -1,3 +1,12 @@
+# quickr 0.2.1
+
+- Added support for `!` and unary `-` and `+` (#49, @mns-nordicals)
+
+- Functions can now return multiple arrays in a `list()`, optionally
+  named (#49, @mns-nordicals).
+  
+- Updates for changes in the R-devel C API (#61)
+
 # quickr 0.2.0
 
 - Internal utility `r2f()` print method now shows the generated `c_bridge`
@@ -26,12 +35,12 @@
 
 - Added workaround for cases where the compiler error message might not
   display correctly in RStudio.
-  
+
 - Improved error message when using case-sensitive variable names (#18, #36, #39)
 
-- Added `AGENTS.md` and `scripts/setup_codex.sh` to enable the ChatGPT/Codex agent 
+- Added `AGENTS.md` and `scripts/setup_codex.sh` to enable the ChatGPT/Codex agent
   to run tests in a docker container configured without internet access.
-  
+
 
 # quickr 0.1.0
 

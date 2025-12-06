@@ -1,6 +1,6 @@
 Package: quickr
 Title: Compiler for R
-Version: 0.2.0
+Version: 0.2.1
 Authors@R: c(
     person("Tomasz", "Kalinowski", , "tomasz@posit.co", role = c("aut", "cre")),
     person("Posit Software, PBC", role = c("cph", "fnd"),
@@ -21,11 +21,11 @@ Config/testthat/edition: 3
 Config/testthat/parallel: true
 Config/testthat/start-first: unary-intrinsics, loops
 Encoding: UTF-8
-RoxygenNote: 7.3.2
+RoxygenNote: 7.3.3
 NeedsCompilation: no
-Packaged: 2025-08-25 20:07:10 UTC; tomasz
+Packaged: 2025-12-05 16:54:56 UTC; tomasz
 Author: Tomasz Kalinowski [aut, cre],
   Posit Software, PBC [cph, fnd] (ROR: <https://ror.org/03wc8by49>)
 Maintainer: Tomasz Kalinowski <tomasz@posit.co>
 Repository: CRAN
-Date/Publication: 2025-08-25 20:30:02 UTC
+Date/Publication: 2025-12-06 14:00:02 UTC
