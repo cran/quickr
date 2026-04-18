@@ -4,10 +4,12 @@
 # quickr <img src="man/figures/logo.png" align="right" height="138"/>
 
 <!-- ![](https://i.giphy.com/media/v1.Y2lkPTc5MGI3NjExMjBhNWt1Z3Q4ZW56cG00c2hncmtwbGJycm53M3JxYWdscjRkaDJobCZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/12haGO61oFZ28w/giphy.gif){alt="An animated GIF showing two characters in a spaceship cockpit rapidly accelerating into hyperspace, with stars stretching into bright streaks, creating a sensation of rapid acceleration and motion."} -->
-
 <!-- badges: start -->
 
 [![R-CMD-check](https://github.com/t-kalinowski/quickr/actions/workflows/R-CMD-check.yaml/badge.svg)](https://github.com/t-kalinowski/quickr/actions/workflows/R-CMD-check.yaml)
+[![Codecov test
+coverage](https://codecov.io/gh/t-kalinowski/quickr/graph/badge.svg)](https://app.codecov.io/gh/t-kalinowski/quickr)
+
 <!-- badges: end -->
 
 The goal of quickr is to make your R code run quicker.
@@ -20,52 +22,30 @@ trade back some of that flexibility for some speed, for the context of a
 single function.
 
 <!-- Programming language design requires some hard decisions and trade-ofs. -->
-
 <!-- When you want to have it all, you typically end up have two (or more!) languages. -->
-
 <!-- An interpreted, dynamic language full of conveniences, and a staticly-typed, explicit, high-performance language. -->
-
 <!-- This is sometimes called the "Two Language Problem". -->
-
 <!-- Like [Numba](https://numba.pydata.org) in Python, or the [Julia](https://julialang.org) language, quickr is a solution to the [two-language problem](https://juliadatascience.io/julia_accomplish). -->
-
 <!-- Unlike those tools however, quickr does not bundle most of LLVM, keeping dependencies lightweight. -->
-
 <!-- Quickr works by translating the R code to Fortran. -->
-
 <!-- Fortran might seem like a surprising choice, but it has many compelling properties: -->
-
 <!-- -   Superb performance. -->
-
 <!--     As a stalwart of the numerical computing community, Fortran has accrued the benefit of countless person-hours from top-tier computer scientists and compiler engineers. -->
-
 <!--     There is a reason that over 20% of R itself, (and numpy, and ...) are still in Fortran, and it's not merely because of legacy. -->
-
 <!--     And this trend of compiler engineers focusing on Fortran is not stopping. -->
-
 <!-- -   Large overlap with R semantics and syntax for numerical computing. -->
-
 <!--     Fortran and R have very similar syntax for operating on arrays. -->
-
 <!--     Like R, Fortran has builtin-in support for nd-arrays, provides vectorized operators on arrays, convenient array slicing semantics that match many capabilities of R's `[` , 1-based indexing, and a well-populated collection of operators for working on those arrays like `min`, `max`, `any` `all`, etc. -->
-
 <!--     This means that it's relatively straightforward to translate R to Fortran, often just a 1:1 mapping of semantics, with some changes to syntax. -->
-
 <!--     This is also why Fortran has such superb performance, and why it attracts compiler engineers to work on it. -->
-
 <!--     Because the language spec guarantees things like, static shapes for nd-arrays, views of those arrays, etc, it provides many opportunities for compiler engineers to do things like generate SIMD instructions, or automatically parallelize code. -->
-
 <!-- -   Excellent support in R. -->
-
 <!--     One of the original motivations for R was to serve as a front-end for Fortran. -->
-
 <!--     Since its inception, R has supported Fortran extensions, and supported them well. -->
-
 <!--     It also means that any computing environment where R build tools are available, Fortran is supported. -->
-
 <!--     The barrier to entry and thorny questions, that, for example, using Rust in CRAN might raise, is non-existent for Fortran. -->
 
-The main exported function is `quick()`, here is how you use it.
+The main exported function is `quick()`. Here is how you use it:
 
 ``` r
 library(quickr)
@@ -125,7 +105,7 @@ convolve_c <- inline::cfunction(
 
 
 
-a <- runif (100000); b <- runif (100)
+a <- runif(100000); b <- runif(100)
 
 timings <- bench::mark(
   r = slow_convolve(a, b),
@@ -137,16 +117,16 @@ timings
 #> # A tibble: 3 × 6
 #>   expression      min   median `itr/sec` mem_alloc `gc/sec`
 #>   <bch:expr> <bch:tm> <bch:tm>     <dbl> <bch:byt>    <dbl>
-#> 1 r             1.04s    1.04s     0.957     782KB    0.957
-#> 2 quickr       4.85ms   5.03ms   198.        782KB    3.61 
-#> 3 c            4.88ms   5.06ms   197.        782KB    4.13
+#> 1 r             1.43s    1.43s     0.702     782KB    0.702
+#> 2 quickr       2.63ms    2.7ms   355.        782KB    6.77 
+#> 3 c            4.92ms   5.22ms   189.        782KB    3.61
 plot(timings) + bench::scale_x_bench_time(base = NULL)
 ```
 
-<img src="man/figures/README-unnamed-chunk-3-1.png" width="100%" />
+<img src="man/figures/README-unnamed-chunk-3-1.png" alt="" width="100%" />
 
 In the case of `convolve()`, `quick()` returns a function approximately
-*200* times quicker, giving similar performance to the C function.
+*200* times quicker, with performance similar to the C function.
 
 `quick()` can accelerate any R function, with some restrictions:
 
@@ -162,17 +142,28 @@ In the case of `convolve()`, `quick()` returns a function approximately
 
 <!-- -->
 
-    #>  [1] -         :         !=        (         [         [<-       {        
-    #>  [8] *         /         &         &&        %/%       %%        ^        
-    #> [15] +         <         <-        <=        =         ==        >        
-    #> [22] >=        |         ||        Arg       Conj      Fortran   Im       
-    #> [29] Mod       Re        abs       acos      as.double asin      atan     
-    #> [36] break     c         cat       cbind     ceiling   character cos      
-    #> [43] declare   dim       double    exp       floor     for       if       
-    #> [50] ifelse    integer   length    log       log10     logical   matrix   
-    #> [57] max       min       ncol      next      nrow      numeric   print    
-    #> [64] prod      raw       repeat    runif     seq       sin       sqrt     
-    #> [71] sum       tan       which.max which.min while
+    #>   [1] -            :            !            !=           (           
+    #>   [6] [            [<-          [<<-         {            *           
+    #>  [11] /            &            &&           %*%          %/%         
+    #>  [16] %%           %o%          ^            +            <           
+    #>  [21] <-           <<-          <=           =            ==          
+    #>  [26] >            >=           |            ||           $           
+    #>  [31] Arg          Conj         Fortran      Im           Mod         
+    #>  [36] Re           abs          acos         all          any         
+    #>  [41] array        as.double    as.integer   asin         atan        
+    #>  [46] backsolve    break        c            cat          cbind       
+    #>  [51] ceiling      character    chol         chol2inv     cos         
+    #>  [56] crossprod    declare      diag         dim          double      
+    #>  [61] drop         exp          floor        for          forwardsolve
+    #>  [66] if           ifelse       integer      is.null      length      
+    #>  [71] log          log10        logical      matrix       max         
+    #>  [76] min          ncol         next         nrow         numeric     
+    #>  [81] outer        print        prod         qr.solve     raw         
+    #>  [86] rbind        rep.int      repeat       rev          runif       
+    #>  [91] seq          seq_along    seq_len      sin          solve       
+    #>  [96] sqrt         stop         sum          svd          t           
+    #> [101] tan          tanh         tcrossprod   trunc        which.max   
+    #> [106] which.min    while
 
 Many of these restrictions are expected to be relaxed as the project
 matures. However, quickr is intended primarily for high-performance
@@ -214,6 +205,14 @@ declare(type(x = double(n)),
         type(y = double(n+2)))
 ```
 
+Tip: declare shapes as specifically as you can. quickr uses these size
+constraints both for compile-time checking and for choosing more
+efficient implementations. For example, if you know a matrix is square,
+declare it as `type(A = double(n, n))` (not `double(n, k)`). That can
+allow quickr to use a faster code path for operations like
+`solve(A, b)`. If the compiler can’t prove a matrix is square, it may
+need to fall back to a more general rectangular solver.
+
 ## More examples:
 
 ### `viterbi`
@@ -221,7 +220,7 @@ declare(type(x = double(n)),
 The Viterbi algorithm is an example of a dynamic programming algorithm
 within the family of Hidden Markov Models
 (<https://en.wikipedia.org/wiki/Viterbi_algorithm>). Here, `quick()`
-makes the `viterbi()` approximately 50 times faster.
+makes `viterbi()` approximately 50 times faster.
 
 ``` r
 slow_viterbi <- function(observations, states, initial_probs, transition_probs, emission_probs) {
@@ -281,12 +280,12 @@ timings
 #> # A tibble: 2 × 6
 #>   expression         min   median `itr/sec` mem_alloc `gc/sec`
 #>   <bch:expr>    <bch:tm> <bch:tm>     <dbl> <bch:byt>    <dbl>
-#> 1 slow_viterbi  147.12µs 162.33µs     5957.    1.59KB     16.8
-#> 2 quick_viterbi   2.48µs   2.62µs   367468.        0B      0
+#> 1 slow_viterbi  170.18µs 186.23µs     5011.    1.59KB     12.4
+#> 2 quick_viterbi   2.44µs   2.72µs   349107.        0B      0
 plot(timings)
 ```
 
-<img src="man/figures/README-unnamed-chunk-6-1.png" width="100%" />
+<img src="man/figures/README-unnamed-chunk-6-1.png" alt="" width="100%" />
 
 ### Diffusion simulation
 
@@ -295,7 +294,13 @@ difference method](https://en.wikipedia.org/wiki/Finite_difference)
 applied to the [Heat
 Equation](https://en.wikipedia.org/wiki/Heat_equation).
 
-Here, `quick()` returns a function over 100 times faster.
+Note the use of local closures within the quick function. Here,
+`quick()` returns a function approximately 20 times faster. The speedup
+is relatively modest because the core operation of computing the
+laplacian is already expressed as a vectorized operation. If we were
+instead comparing against `for` loops that operate on individual array
+elements, the speedup would be much more substantial. In general,
+idiomatic vectorized R code is quite fast already!
 
 ``` r
 diffuse_heat <- function(nx, ny, dx, dy, dt, k, steps) {
@@ -309,33 +314,40 @@ diffuse_heat <- function(nx, ny, dx, dy, dt, k, steps) {
     type(steps = integer(1))
   )
 
-  # Initialize temperature grid
   temp <- matrix(0, nx, ny)
-  temp[nx / 2, ny / 2] <- 100  # Initial heat source in the center
+  temp[nx %/% 2L, ny %/% 2L] <- 100
 
-  # Time stepping
-  for (step in seq_len(steps)) {
-    # Apply boundary conditions
+  apply_boundary_conditions <- function(temp) {
     temp[1, ] <- 0
     temp[nx, ] <- 0
     temp[, 1] <- 0
     temp[, ny] <- 0
+    temp
+  }
 
-    # Update using finite differences
+  update_temperature <- function(temp) {
     temp_new <- temp
-    for (i in 2:(nx - 1)) {
-      for (j in 2:(ny - 1)) {
-        temp_new[i, j] <- temp[i, j] + k * dt *
-          ((temp[i + 1, j] - 2 * temp[i, j] + temp[i - 1, j]) /
-             dx ^ 2 + (temp[i, j + 1] - 2 * temp[i, j] + temp[i, j - 1]) / dy ^ 2)
-      }
-    }
-    temp <- temp_new
 
+    i <- 2:(nx - 1)
+    j <- 2:(ny - 1)
+
+    laplacian <-
+      (temp[i + 1, j] - 2 * temp[i, j] + temp[i - 1, j]) / dx ^ 2 +
+      (temp[i, j + 1] - 2 * temp[i, j] + temp[i, j - 1]) / dy ^ 2
+
+    temp_new[i, j] <- temp[i, j] + k * dt * laplacian
+    temp_new
+  }
+
+  for (step in seq_len(steps)) {
+    temp <- temp |>
+      apply_boundary_conditions() |>
+      update_temperature()
   }
 
   temp
 }
+
 
 quick_diffuse_heat <- quick(diffuse_heat)
 
@@ -360,18 +372,18 @@ summary(timings, relative = TRUE)
 #> # A tibble: 2 × 6
 #>   expression           min median `itr/sec` mem_alloc `gc/sec`
 #>   <bch:expr>         <dbl>  <dbl>     <dbl>     <dbl>    <dbl>
-#> 1 diffuse_heat        131.   127.        1      1011.      Inf
-#> 2 quick_diffuse_heat    1      1       127.        1       NaN
+#> 1 diffuse_heat        13.6   16.8       1       4893.      Inf
+#> 2 quick_diffuse_heat   1      1        16.7        1       NaN
 plot(timings)
 ```
 
-<img src="man/figures/README-unnamed-chunk-7-1.png" width="100%" />
+<img src="man/figures/README-unnamed-chunk-7-1.png" alt="" width="100%" />
 
 ### Rolling Mean
 
-Here is quickr used to calculate a rolling mean. Note that the CRAN
-package RcppRoll already provides a highly optimized rolling mean, which
-we include in the benchmarks for comparison.
+Here is *quickr* used to calculate a rolling mean. The CRAN package
+*RcppRoll* already provides a highly optimized rolling mean, which we
+include in the benchmarks for comparison.
 
 ``` r
 slow_roll_mean <- function(x, weights, normalize = TRUE) {
@@ -407,15 +419,192 @@ timings
 #> # A tibble: 3 × 6
 #>   expression      min   median `itr/sec` mem_alloc `gc/sec`
 #>   <bch:expr> <bch:tm> <bch:tm>     <dbl> <bch:byt>    <dbl>
-#> 1 r           114.2ms 132.75ms      5.66  124.24MB     9.44
-#> 2 rcpp        19.35ms  19.58ms     50.9     4.44MB     0   
-#> 3 quickr       6.73ms   6.87ms    142.    781.35KB     1.98
+#> 1 r           187.9ms  292.3ms      3.42  124.24MB    10.3 
+#> 2 rcpp        20.12ms   20.4ms     48.9     4.46MB     0   
+#> 3 quickr       6.82ms    7.2ms    133.    781.35KB     1.99
 
 timings$expression <- factor(names(timings$expression), rev(names(timings$expression)))
 plot(timings) + bench::scale_x_bench_time(base = NULL)
 ```
 
-<img src="man/figures/README-unnamed-chunk-8-1.png" width="100%" />
+<img src="man/figures/README-unnamed-chunk-8-1.png" alt="" width="100%" />
+
+## Linear regression benchmark (`fastLm`)
+
+quickr supports a variety of matrix operations from base R, including
+most of the common linear algebra functions like `%*%`, `crossprod()`,
+`tcrossprod()`, `solve()`, and `chol()`. Performance is generally
+similar to running the same code in R itself, but as you start to chain
+multiple operations in a function, you may see speed-ups due to reduced
+interpreter overhead. Actual performance depends on the BLAS/LAPACK
+libraries linked to your R build (e.g. OpenBLAS, MKL, Accelerate).
+
+To illustrate, here is a benchmark showing a `fastLm`-style
+implementation comparing base R, quickr, and (for reference) a compiled
+RcppArmadillo implementation. The `fastLm` function is adapted from the
+README of the RcppArmadillo project.
+
+``` r
+# reference implementation
+fast_lm_ref <- function(X, y) {
+  fit <- lm(y ~ X - 1)
+  s <- summary(fit)
+
+  list(
+    coefficients = unname(coef(fit)),
+    stderr = unname(s$coefficients[, "Std. Error"]),
+    df.residual = fit$df.residual
+  )
+}
+
+# RcppArmadillo implementation
+Rcpp::sourceCpp(
+code = '
+#include <RcppArmadillo/Lighter>
+// [[Rcpp::depends(RcppArmadillo)]]
+
+// [[Rcpp::export]]
+Rcpp::List fast_lm_rcpp_armadillo(const arma::mat& X, const arma::colvec& y) {
+    int n = X.n_rows, k = X.n_cols;
+
+    arma::colvec coef = arma::solve(X, y);     // fit model y ~ X
+    arma::colvec res  = y - X*coef;            // residuals
+    double s2 = arma::dot(res, res) / (n - k); // std.errors of coefficients
+    arma::colvec std_err = arma::sqrt(s2 * arma::diagvec(arma::pinv(arma::trans(X)*X)));
+
+    return Rcpp::List::create(Rcpp::Named("coefficients") = coef,
+                              Rcpp::Named("stderr")       = std_err,
+                              Rcpp::Named("df.residual")  = n - k);
+}')
+
+# Plain R fast-path
+fast_lm_r <- function(X, y) {
+  declare(
+    type(X = double(n, k)),
+    type(y = double(n))
+  )
+
+  # analogous to arma::pinv()
+  pinv_svd <- function(A, tol = NULL) {
+    s <- svd(A)
+    if (is.null(tol)) {
+      tol <- max(dim(A)) * max(s$d) * .Machine$double.eps
+    }
+    d_inv <- ifelse(s$d > tol, 1 / s$d, 0)
+    s$v %*% (d_inv * t(s$u))
+  }
+
+  df_residual <- nrow(X) - ncol(X)
+
+  coef <- qr.solve(X, y) # analogous to arma::solve(X, y)
+  res <- y - X %*% coef
+  s2 <- drop(crossprod(res)) / df_residual
+
+  XtX <- crossprod(X)
+  XtX_pinv <- pinv_svd(XtX) # analogous to arma::pinv()
+  std_err <- sqrt(s2 * diag(XtX_pinv))
+
+  list(
+    coefficients = coef, 
+    stderr = std_err,
+    df.residual = df_residual
+  )
+}
+
+# quickr func
+quick_fast_lm <- quick(fast_lm_r)
+```
+
+### Benchmark
+
+``` r
+set.seed(1)
+
+beta <- c(0.5, 1.0, -2.0, 10, 5)
+X <- cbind(1, matrix(rnorm(3 * 10^5), ncol = 4))
+y <- as.vector(X %*% beta + rnorm(nrow(X), sd = 2))
+
+timings <- bench::mark(
+  `reference`     = fast_lm_ref(X, y),
+  `RcppArmadillo` = fast_lm_rcpp_armadillo(X, y),
+  `plain R`       = fast_lm_r(X, y),
+  `quickr`        = quick_fast_lm(X, y)
+)
+
+timings
+#> # A tibble: 4 × 6
+#>   expression         min   median `itr/sec` mem_alloc `gc/sec`
+#>   <bch:expr>    <bch:tm> <bch:tm>     <dbl> <bch:byt>    <dbl>
+#> 1 reference      65.18ms  65.41ms      13.9    29.6MB     13.9
+#> 2 RcppArmadillo   5.56ms   7.86ms     110.         0B      0  
+#> 3 plain R          5.1ms   8.82ms      66.7    13.2MB     16.0
+#> 4 quickr          2.22ms   2.66ms     256.         0B      0
+plot(timings) + ggplot2::scale_y_discrete(limits = rev(c( 
+  "reference", "RcppArmadillo", "plain R", "quickr"
+)))
+```
+
+<img src="man/figures/README-unnamed-chunk-10-1.png" alt="" width="100%" />
+
+------------------------------------------------------------------------
+
+## Parallelize loops with OpenMP
+
+Use `declare(parallel())` to annotate the next `for` loop or `sapply()`
+call for OpenMP parallelization. Parallel loops must be
+order-independent: avoid shared-state updates or inter-iteration
+dependencies. OpenMP adds overhead, so it can be slower for small
+workloads, but substantially faster for larger ones.
+
+Here is a concrete example using `colSums()`. At smaller sizes, the
+quickr serial version is fastest (even faster than base `colSums()`). As
+sizes grow, the two serial versions converge, and the parallel version
+pulls ahead. However, the speedup is not linear with core count (e.g.,
+with 12 cores, the speedup is closer to ~6x).
+
+``` r
+colSums_quick_parallel <- quick(function(x) {
+  declare(type(x = double(NA, NA)))
+  declare(parallel())
+  sapply(seq_len(nrow(x)), \(r) sum(x[, r]))
+})
+
+colSums_quick <- quick(function(x) {
+  declare(type(x = double(NA, NA)))
+  sapply(seq_len(nrow(x)), \(r) sum(x[, r]))
+})
+
+r <- bench::press(
+  n = 2^(4:14),
+  {
+    m <- array(runif(n * n), c(n, n))
+    bench::mark(
+      parallel = colSums_quick_parallel(m),
+      quick = colSums_quick(m),
+      base = colSums(m),
+    )
+  },
+  .quiet = TRUE
+)
+
+library(ggplot2)
+library(dplyr, warn.conflicts = FALSE)
+
+r |>
+  mutate(.before = 1,
+         desc = attr(expression, "description")) |>
+  select(desc, n, median) |>
+  ggplot(aes(x = n, y = median, color = desc)) +
+  geom_point() + geom_line() +
+  scale_x_log10() + bench::scale_y_bench_time()
+```
+
+<img src="man/figures/README-unnamed-chunk-11-1.png" alt="" width="100%" />
+
+quickr does not set OpenMP thread counts. To control threads, set
+`OMP_NUM_THREADS` (and optionally `OMP_THREAD_LIMIT` or `OMP_DYNAMIC`)
+before calling a compiled function, e.g.
+`Sys.setenv(OMP_NUM_THREADS = "4")`.
 
 ## Using `quickr` in an R package
 
@@ -458,8 +647,16 @@ On macOS:
   ``` zsh
   sudo xcode-select --install
   # curl -LO https://mac.r-project.org/tools/gfortran-12.2-universal.pkg # R 4.4
+  # sudo installer -pkg gfortran-12.2-universal.pkg -target /
   curl -LO https://mac.r-project.org/tools/gfortran-14.2-universal.pkg   # R 4.5
-  sudo installer -pkg gfortran-12.2-universal.pkg -target /
+  sudo installer -pkg gfortran-14.2-universal.pkg -target /
+  ```
+
+- Optional: install `flang-new` via Homebrew (used by quickr on macOS
+  when available):
+
+  ``` zsh
+  brew install flang
   ```
 
 On Windows:

@@ -4,6 +4,82 @@
 #' @importFrom utils gethash hashtab remhash sethash str
 NULL
 
+`%||%` <- function(x, y) if (is.null(x)) y else x
+
+fortranize_name <- function(name, prefix = "v_") {
+  stopifnot(is_string(name), is_string(prefix), nzchar(prefix))
+  out <- gsub("[^A-Za-z0-9_]", "_", name)
+  if (!nzchar(out) || !grepl("^[A-Za-z]", out)) {
+    out <- paste0(prefix, out)
+  }
+  out
+}
+
+fortranize_expr_symbols <- function(expr) {
+  if (!is.symbol(expr) && !is.call(expr)) {
+    return(expr)
+  }
+  syms <- all.vars(expr)
+  if (!length(syms)) {
+    return(expr)
+  }
+  replacements <- setNames(
+    lapply(syms, \(sym) as.symbol(fortranize_name(sym))),
+    syms
+  )
+  substitute_(expr, list2env(replacements, parent = emptyenv()))
+}
+
+scope_fortran_symbol <- function(sym, scope) {
+  stopifnot(is.symbol(sym))
+  if (is.null(scope)) {
+    return(sym)
+  }
+  var <- get0(as.character(sym), scope)
+  if (inherits(var, Variable) && !is.null(var@name)) {
+    return(as.symbol(var@name))
+  }
+  sym
+}
+
+quickr_r_cmd <- function(
+  os_type = .Platform$OS.type,
+  r_home = R.home,
+  file_exists = file.exists
+) {
+  r_cmd <- r_home("bin/R")
+  if (identical(os_type, "windows") && !file_exists(r_cmd)) {
+    r_cmd <- paste0(r_cmd, ".exe")
+  }
+  r_cmd
+}
+
+quickr_r_cmd_config_value <- function(
+  name,
+  r_cmd = quickr_r_cmd(),
+  system2 = base::system2
+) {
+  out <- tryCatch(
+    suppressWarnings(system2(
+      r_cmd,
+      c("CMD", "config", name),
+      stdout = TRUE,
+      stderr = FALSE
+    )),
+    error = function(e) character()
+  )
+  status <- attr(out, "status")
+  if (!is.null(status)) {
+    return("")
+  }
+  value <- trimws(paste(out, collapse = " "))
+  if (!nzchar(value) || grepl("^ERROR:", value)) {
+    return("")
+  }
+  value
+}
+
+
 # @export
 # This will be exported by S7 next release.
 `:=` <- function(left, right) {
@@ -113,6 +189,31 @@ drop_nulls <- function(x, i) {
 
 last <- function(x) x[[length(x)]]
 drop_last <- function(x) x[-length(x)]
+
+compile_nonreturn_statements <- function(stmts, scope) {
+  if (!length(stmts)) {
+    check_pending_parallel_consumed(scope)
+    return("")
+  }
+
+  compiled <- vector("list", length(stmts))
+  for (i in seq_along(stmts)) {
+    stmt <- stmts[[i]]
+    check_pending_parallel_target(stmt, scope)
+    stmt_f <- r2f(stmt, scope)
+    if (!is.null(stmt_f@value)) {
+      stop(
+        "all expressions except the final return must compile to a statement (no value); found: ",
+        deparse1(stmt),
+        call. = FALSE
+      )
+    }
+    compiled[[i]] <- stmt_f
+  }
+
+  check_pending_parallel_consumed(scope)
+  str_flatten_lines(compiled)
+}
 # fmt: skip
 {
 is_scalar_na      <- function(x) is.atomic(x)    && !is.object(x) && length(x) == 1L && is.na(x)
@@ -121,6 +222,7 @@ is_scalar_integer <- function(x) is.integer(x)   && !is.object(x) && length(x) =
 is_string         <- function(x) is.character(x) && length(x) == 1L && !is.na(x) # could also be 'glue' class.
 is_bool           <- function(x) is.logical(x)   && !is.object(x) && length(x) == 1L && !is.na(x)
 is_number         <- function(x) is.numeric(x)   && !is.object(x) && length(x) == 1L && !is.na(x)
+is_scalar_integerish <- function(x) is_number(x) && trunc(x) == x
 is_wholenumber    <- function(x) is.numeric(x)   && !is.object(x) && length(x) == 1L && !is.na(x) &&
   x >= 0L && (is.integer(x) || is.double(x) && trunc(x) == x)
 }
@@ -230,6 +332,7 @@ zip_lists <- function(...) {
 }
 
 is_missing <- function(x) missing(x) || identical(x, quote(expr = ))
+
 
 is_type_call <- function(e) {
   is.call(e) && identical(e[[1]], quote(type))

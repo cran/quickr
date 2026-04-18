@@ -283,6 +283,16 @@ Variable := new_class(
       set_once = FALSE #TRUE
     ),
 
+    r_name = prop_string(
+      allow_null = TRUE,
+      coerce = quote(switch(
+        typeof(value),
+        symbol = as.character(value),
+        value
+      )),
+      set_once = FALSE
+    ),
+
     rank = new_property(
       class_integer,
       getter = function(self) {
@@ -291,6 +301,8 @@ Variable := new_class(
     ),
 
     modified = prop_bool(default = FALSE),
+
+    loop_is_singleton = prop_bool(default = FALSE),
 
     r = new_property(
       NULL | class_language | class_atomic,
@@ -318,8 +330,26 @@ Variable := new_class(
       getter = function(self) {
         self@rank == 0 || identical(self@dims, list(1L))
       }
-    )
-  )
+    ),
+
+    # When TRUE, Fortran/C interfaces should treat logicals as integer(c_int)
+    # storage (0/1) rather than Fortran LOGICAL.
+    logical_as_int = prop_bool(default = FALSE),
+
+    # TRUE when the variable is available via host association and should not
+    # be redeclared in the local scope.
+    host_associated = prop_bool(default = FALSE),
+
+    # When set, references to this variable should treat the named dummy
+    # argument as an optional input (e.g., is.null() -> .not. present()).
+    optional_dummy = prop_string(default = NULL, allow_null = TRUE)
+  ),
+
+  validator = function(self) {
+    if (isTRUE(self@logical_as_int) && !identical(self@mode, "logical")) {
+      "`logical_as_int` can only be TRUE when `mode` is 'logical'"
+    }
+  }
 )
 
 # method(print, Variable) <- function(x, ...) {
@@ -331,6 +361,12 @@ Fortran := new_class(
 
   properties = list(
     value = NULL | Variable,
+
+    # Metadata flags used during compilation/lowering. Keep these as explicit
+    # properties rather than ad-hoc attributes so they are discoverable and
+    # consistently propagated with the Fortran object.
+    logical_booleanized = prop_bool(default = FALSE),
+    writes_to_dest = prop_bool(default = FALSE),
 
     r = new_property(
       # custom setter only to workaround https://github.com/RConsortium/S7/issues/511
@@ -347,6 +383,21 @@ Fortran := new_class(
       "must be a length 1 string"
     }
   }
+)
+
+SvdResult := new_class(
+  properties = list(
+    d = Variable,
+    u = NULL | Variable,
+    v = NULL | Variable
+  )
+)
+
+LocalClosure := new_class(
+  properties = list(
+    name = prop_string(default = NULL, allow_null = TRUE),
+    fun = class_function
+  )
 )
 
 
@@ -366,7 +417,20 @@ FortranSubroutine := new_class(
   )
 )
 
-`%error%` <- function(x, y) tryCatch(x, error = function(e) y)
+R2FHandler := new_class(
+  class_function,
+  properties = list(
+    dest_supported = prop_bool(default = FALSE),
+    dest_infer = new_property(NULL | class_function),
+    dest_infer_name = prop_string(default = NULL, allow_null = TRUE),
+    # When NULL, r2f will resolve the callable by name and use match.call().
+    # When FALSE, r2f will not attempt match.call().
+    match_fun = new_property(
+      NULL | class_function | class_logical,
+      default = NULL
+    )
+  )
+)
 
 try_prop <- function(object, name) S7::prop(object, name) %error% NULL
 

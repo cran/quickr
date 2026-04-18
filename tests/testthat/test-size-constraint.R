@@ -1,5 +1,7 @@
 # Unit tests for size constraints
 
+skip_on_cran()
+
 test_that("size constraint", {
   fn <- function(a, b) {
     declare(type(a = double(n)), type(b = double(n + 1)))
@@ -40,4 +42,17 @@ test_that("size constraint", {
   expect_identical(qfn(-3), fn(-3))
   expect_identical(qfn(0), fn(0))
   expect_identical(qfn(-0), fn(-0))
+})
+
+test_that("size symbols honor declared argument sizes", {
+  fn <- function(n) {
+    declare(
+      type(n = integer(1)),
+      type(out = double(n))
+    )
+    out <- double(n)
+    out
+  }
+
+  expect_quick_identical(fn, list(5L), list(10L))
 })

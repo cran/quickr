@@ -40,8 +40,8 @@
         real(c_double), intent(out) :: out(((x__len_ - weights__len_) + 1))
       
         ! locals
-        integer(c_int) :: i
         integer(c_int) :: n
+        integer(c_int) :: i
         ! manifest end
       
       
@@ -51,7 +51,7 @@
           weights = ((weights / sum(weights)) * size(weights))
         end if
         do i = 1, size(out)
-          out(i) = (sum((x(i:((i + n) - 1_c_int):sign(1, ((i + n) - 1_c_int)-i)) * weights)) / real(size(weights), kind=c_double))
+          out(i) = (sum((x(i:(((i + n) - 1_c_int)):sign(1, (((i + n) - 1_c_int))-i)) * weights)) / real(size(weights), kind=c_double))
         end do
       end subroutine
     Code

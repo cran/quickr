@@ -1,10 +1,13 @@
 # Unit tests for unary intrinsic functions
 
+skip_on_cran()
+
 test_that("double unary intrinsics", {
   double_intrinsics <- c(
     "sin",
     "cos",
     "tan",
+    "tanh",
     "asin",
     "acos",
     "atan",
@@ -72,6 +75,7 @@ test_that("complex unary intrinsics", {
     "sin",
     "cos",
     "tan",
+    "tanh",
     "asin",
     "acos",
     "atan",

@@ -1,3 +1,5 @@
+skip_on_cran()
+
 test_that("multiple return values", {
   fn <- function(x) {
     declare(type(x = integer(n)))
@@ -111,8 +113,6 @@ test_that("empty return list errors", {
   }
   expect_error(quick(fn), "must contain at least one element")
 })
-
- 
 
 
 test_that("mixed named and unnamed list work", {

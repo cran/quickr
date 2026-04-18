@@ -28,10 +28,22 @@ compile_package <- function(path = ".") {
   # TODO: need to unset various R_* env vars, or just
   # take a dep on callr
   # TODO: prompt to install pkgload if not available?
-  system2(
+  out <- suppressWarnings(system2(
     file.path(R.home("bin"), "R"),
-    c("-q", "-e", shQuote("pkgload::load_all()"))
-  )
+    c("-q", "-e", shQuote("pkgload::load_all(quiet = TRUE)")),
+    stdout = TRUE,
+    stderr = TRUE
+  ))
+  if (!is.null(status <- attr(out, "status"))) {
+    stop(
+      "pkgload::load_all() failed with status ",
+      status,
+      ":\n",
+      paste(out, collapse = "\n"),
+      call. = FALSE
+    )
+  }
+  invisible(out)
 }
 
 
@@ -83,17 +95,35 @@ dump_collected <- function() {
     )
   }
 
-  sources <- zip_lists(imap(quick_funcs, function(func, name) {
+  compiled_quick_funcs <- imap(quick_funcs, function(func, name) {
     fsub <- new_fortran_subroutine(name, func)
-    cbridge <- make_c_bridge(fsub, headers = name == names(quick_funcs)[1])
-    list(f90 = fsub, c = cbridge)
+    cbridge <- make_c_bridge(fsub, headers = FALSE)
+    list(
+      name = name,
+      f90 = fsub,
+      c = cbridge
+    )
+  })
+
+  if (length(compiled_quick_funcs)) {
+    compiled_quick_funcs[[1L]]$c <- make_c_bridge(
+      compiled_quick_funcs[[1L]]$f90,
+      headers = TRUE,
+      force_rng_header = TRUE,
+      force_rmath_header = TRUE
+    )
+  }
+
+  sources <- zip_lists(lapply(compiled_quick_funcs, function(x) {
+    list(f90 = x$f90, c = x$c)
   })) |>
     lapply(\(x) x |> unlist() |> interleave("\n"))
 
-  entries <- paste0(
+  entry_lines <- c(
     sprintf('  {"%1$s", (DL_FUNC) &%1$s, -1}', paste0(names(quick_funcs), "_")),
-    collapse = ",\n"
+    "  {NULL, NULL, 0}"
   )
+  entries <- paste(entry_lines, collapse = ",\n")
   entries <- sprintf(
     "static const R_ExternalMethodDef QuickrEntries[] = {\n%s\n};",
     entries

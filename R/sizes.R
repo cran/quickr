@@ -14,8 +14,10 @@ check_type_call <- function(cl) {
 
 type_call_to_var <- function(cl) {
   check_type_call(cl)
+  r_name <- names(cl)[-1]
   Variable(
-    name = names(cl)[-1],
+    name = fortranize_name(r_name),
+    r_name = r_name,
     mode = as.character(cl[[2L]][[1L]]),
     dims = unname(as.list(cl[[2]])[-1])
   )
@@ -23,7 +25,7 @@ type_call_to_var <- function(cl) {
 
 var_to_type_call <- function(var) {
   arg <- as.call(c(as.symbol(var@mode), var@dims))
-  arg <- setNames(list(arg), var@name)
+  arg <- setNames(list(arg), var@r_name %||% var@name)
   as.call(c(quote(type), arg))
 }
 
@@ -48,6 +50,26 @@ self_evaluate <- function(...) sys.call()
 substitute_declared_sizes <- function(e) {
   stopifnot(is_call(e, quote(`{`)))
 
+  declared_names <- local({
+    names_out <- character()
+    walk <- function(node) {
+      if (is_call(node, quote(declare))) {
+        args <- get_flattened_args(node)
+        for (a in args) {
+          if (is_type_call(a)) {
+            nm <- names(as.list(a)[-1])
+            names_out <<- c(names_out, nm)
+          }
+        }
+      }
+      if (is.call(node)) {
+        lapply(as.list(node), walk)
+      }
+    }
+    walk(e)
+    unique(names_out[nzchar(names_out)])
+  })
+
   aliases <- new.env(parent = emptyenv())
   eval_env <- new.env(parent = emptyenv())
   for (name in all.names(e, functions = TRUE, unique = TRUE)) {
@@ -69,7 +91,11 @@ substitute_declared_sizes <- function(e) {
         var <- type_call_to_var(e)
         var@dims <- imap(var@dims, function(size, axis) {
           size_name <- as.symbol(get_size_name(var, axis))
-          if (is.symbol(size) && !exists(size, aliases)) {
+          if (
+            is.symbol(size) &&
+              !exists(size, aliases) &&
+              !(as.character(size) %in% declared_names)
+          ) {
             # user defined implicit size_name alias
             assign(as.character(size), size_name, aliases)
             size <- size_name
@@ -106,6 +132,24 @@ substitute_declared_sizes <- function(e) {
 
 
 r2size <- function(r, scope) {
+  sanitize_dim <- function(dim) {
+    if (is.symbol(dim) || is.call(dim)) {
+      return(r2size(dim, scope))
+    }
+    dim
+  }
+
+  resolve_var_dim <- function(var_expr, axis, expr = var_expr) {
+    var <- get0(as.character(var_expr), scope)
+    if (!inherits(var, Variable)) {
+      stop("could not resolve size: ", deparse1(expr))
+    }
+    if (axis > var@rank) {
+      stop("insufficient rank of variable in ", deparse1(expr))
+    }
+    sanitize_dim(var@dims[[axis]])
+  }
+
   typeof(r) |>
     switch(
       integer = r,
@@ -120,16 +164,19 @@ r2size <- function(r, scope) {
         if (is_size_name(r)) {
           return(r)
         }
-        var <- get(r, scope)
+        var <- get0(as.character(r), scope)
+        if (!inherits(var, Variable)) {
+          stop("could not resolve size: ", as.character(r))
+        }
         if (var@mode != "integer" || !passes_as_scalar(var)) {
           warning("size is not an integer:", as.character(r))
         }
         if (var@is_arg && !var@modified) {
-          return(r)
+          return(scope_fortran_symbol(r, scope))
         }
         # TODO: add specific unit tests here
         if (identical(var@r, r)) {
-          return(r)
+          return(scope_fortran_symbol(r, scope))
         }
         # make a best effort to use the r expression last assigned to the
         # symbol, or fail gracefully and return NA.
@@ -138,62 +185,52 @@ r2size <- function(r, scope) {
         r2size(var@r, scope)
       },
       language = {
-        as.character(r[[1]]) |>
-          switch(
-            `+` = ,
-            `-` = ,
-            `/` = ,
-            `*` = ,
-            `^` = ,
-            `%/%` = ,
-            `%%` = {
-              args <- as.list(r)[-1]
-              args <- lapply(args, r2size, scope)
-              if (anyNA(rapply(args, as.list))) {
-                return(NA_integer_)
-              }
-              cl <- as.call(c(r[[1]], args))
-              if (all(map_lgl(args, is.atomic))) {
-                cl <- eval(cl, baseenv())
-              }
-              cl
-            },
-            length = {
-              var <- get(r[[2L]], scope)
-              if (var@rank == 1) {
-                return(var@dims[[1L]])
-              }
-              len <- reduce(var@dims, \(d1, d2) call("*", d1, d2))
-              r2size(len, scope)
-            },
-            `[` = {
-              # [ only works when paired with dim()
-              if (!is_call(r[[2L]], quote(dim))) {
-                return(NA_integer_)
-              }
-              var <- get(r[[2L]][[2L]], scope)
-              axis <- r[[3]]
-              if (!is_wholenumber(axis)) {
-                return(NA_integer_)
-              }
-              if (axis > var@rank) {
-                stop("insufficient rank of variable in ", deparse1(r))
-              }
-              var@dims[[axis]]
-            },
-            # dim = {
-            #
-            # },
-            nrow = {
-              var <- get(r[[2L]], scope)
-              var@dims[[1]]
-            },
-            ncol = {
-              var <- get(r[[2L]], scope)
-              var@dims[[2]]
-            },
-            NA_integer_
-          )
+        op <- as.character(r[[1]])
+
+        if (op %in% c("+", "-", "/", "*", "^", "%/%", "%%")) {
+          args <- as.list(r)[-1]
+          args <- lapply(args, r2size, scope)
+          if (anyNA(rapply(args, as.list))) {
+            return(NA_integer_)
+          }
+          cl <- as.call(c(r[[1]], args))
+          if (all(map_lgl(args, is.atomic))) {
+            cl <- eval(cl, baseenv())
+          }
+          return(cl)
+        }
+
+        switch(
+          op,
+          length = {
+            var <- get0(as.character(r[[2L]]), scope)
+            if (!inherits(var, Variable)) {
+              stop("could not resolve size: ", deparse1(r))
+            }
+            if (var@rank == 1) {
+              return(sanitize_dim(var@dims[[1L]]))
+            }
+            len <- reduce(var@dims, \(d1, d2) call("*", d1, d2))
+            r2size(len, scope)
+          },
+          `[` = {
+            # [ only works when paired with dim()
+            if (!is_call(r[[2L]], quote(dim))) {
+              return(NA_integer_)
+            }
+            axis <- r[[3]]
+            if (!is_wholenumber(axis)) {
+              return(NA_integer_)
+            }
+            resolve_var_dim(r[[2L]][[2L]], axis, r)
+          },
+          # dim = {
+          #
+          # },
+          nrow = resolve_var_dim(r[[2L]], 1L, r),
+          ncol = resolve_var_dim(r[[2L]], 2L, r),
+          NA_integer_
+        )
       },
       NA_integer_
     )
@@ -204,7 +241,10 @@ r2dims <- function(r, scope) {
     as.character(r[[1]]) |>
       switch(
         dim = {
-          var <- get(r[[2L]], scope)
+          var <- get0(as.character(r[[2L]]), scope)
+          if (!inherits(var, Variable)) {
+            stop("could not resolve dims: ", deparse1(r))
+          }
           return(var@dims)
         },
         c = {

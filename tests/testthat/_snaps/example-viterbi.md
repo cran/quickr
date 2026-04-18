@@ -74,8 +74,8 @@
     Code
       cat(fsub)
     Output
-      subroutine viterbi(observations, states, initial_probs, transition_probs, emission_probs, out, emission_probs__dim_2_, &
-      observations__len_, states__len_) bind(c)
+      subroutine viterbi(observations, states, initial_probs, transition_probs, emission_probs, out, emission_probs__dim_2_,&
+      & observations__len_, states__len_) bind(c)
         use iso_c_binding, only: c_double, c_int, c_ptrdiff_t
         implicit none
       
@@ -94,15 +94,20 @@
         integer(c_int), intent(out) :: out(observations__len_)
       
         ! locals
-        integer(c_int) :: current_state
-        integer(c_int) :: num_steps
-        integer(c_int) :: step
-        integer(c_int) :: backpointer(states__len_, observations__len_)
-        real(c_double) :: trellis(states__len_, observations__len_)
         integer(c_int) :: num_states
-        integer(c_int) :: path(observations__len_)
-        real(c_double) :: probabilities(states__len_)
+        integer(c_int) :: num_steps
+        real(c_double), allocatable :: trellis(:, :)
+        integer(c_int), allocatable :: backpointer(:, :)
+        integer(c_int) :: step
+        integer(c_int) :: current_state
+        real(c_double), allocatable :: probabilities(:)
+        integer(c_int), allocatable :: path(:)
         ! manifest end
+      
+        allocate(trellis(states__len_, observations__len_))
+        allocate(backpointer(states__len_, observations__len_))
+        allocate(probabilities(states__len_))
+        allocate(path(observations__len_))
       
       
         num_states = size(states)
@@ -119,7 +124,7 @@
         end do
         path = 0
         path(num_steps) = maxloc(trellis(:, num_steps), 1)
-        do step = (num_steps - 1_c_int), 1_c_int, sign(1, 1_c_int-(num_steps - 1_c_int))
+        do step = ((num_steps - 1_c_int)), 1_c_int, sign(1, 1_c_int-((num_steps - 1_c_int)))
           path(step) = backpointer(path((step + 1_c_int)), (step + 1_c_int))
         end do
         out = states(path)
@@ -288,8 +293,8 @@
     Code
       cat(fsub <- r2f(viterbi))
     Output
-      subroutine viterbi(observations, states, initial_probs, transition_probs, emission_probs, out, emission_probs__dim_2_, &
-      observations__len_, states__len_) bind(c)
+      subroutine viterbi(observations, states, initial_probs, transition_probs, emission_probs, out, emission_probs__dim_2_,&
+      & observations__len_, states__len_) bind(c)
         use iso_c_binding, only: c_double, c_int, c_ptrdiff_t
         implicit none
       
@@ -308,13 +313,18 @@
         integer(c_int), intent(out) :: out(observations__len_)
       
         ! locals
-        integer(c_int) :: current_state
+        real(c_double), allocatable :: trellis(:, :)
+        integer(c_int), allocatable :: backpointer(:, :)
         integer(c_int) :: step
-        integer(c_int) :: backpointer(states__len_, observations__len_)
-        real(c_double) :: trellis(states__len_, observations__len_)
-        integer(c_int) :: path(observations__len_)
-        real(c_double) :: probabilities(states__len_)
+        integer(c_int) :: current_state
+        real(c_double), allocatable :: probabilities(:)
+        integer(c_int), allocatable :: path(:)
         ! manifest end
+      
+        allocate(trellis(states__len_, observations__len_))
+        allocate(backpointer(states__len_, observations__len_))
+        allocate(probabilities(states__len_))
+        allocate(path(observations__len_))
       
       
         trellis = 0.0_c_double
